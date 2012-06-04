@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.Activation;
 using Windows.Foundation;
@@ -32,6 +33,7 @@ namespace DropBox
         private const string  AppKey = "79ouoo4g483jmnz";
         private const string AppSecret = "z5odpncw8jhzgk9";
         private string _getResponse;
+        private string _postResponse;
 
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
@@ -76,13 +78,13 @@ namespace DropBox
             Window.Current.Activate();
 
             if(String.IsNullOrEmpty(_token)){
-                
+
                 //
                 // Acquiring a request token
                 //
                 TimeSpan SinceEpoch = (DateTime.Now - new DateTime(1970, 1, 1, 0, 0, 0, 0).ToLocalTime());
                 Random Rand = new Random();
-                String FlickrUrl = "https://api.dropbox.com/1/oauth/request_token";
+                String TwitterUrl = "https://api.dropbox.com/1/oauth/request_token";
                 Int32 Nonce = Rand.Next(1000000000);
                 //
                 // Compute base signature string and sign it.
@@ -90,31 +92,31 @@ namespace DropBox
                 //    Parameters need to be sorted in alphabetical order
                 //    Keys and values should be URL Encoded.
                 //
-                String SigBaseStringParams = "oauth_timestamp=" + Math.Round(SinceEpoch.TotalSeconds); 
-                SigBaseStringParams += "&" + "oauth_signature_method=HMAC-SHA1";
-                SigBaseStringParams += "&" + "oauth_nonce=" + Nonce.ToString();
-                SigBaseStringParams += "&" + "oauth_version=1.0";
+                String SigBaseStringParams = "oauth_callback=" + Uri.EscapeDataString(WebAuthenticationBroker.GetCurrentApplicationCallbackUri().ToString());
                 SigBaseStringParams += "&" + "oauth_consumer_key=" + AppKey;
-                SigBaseStringParams += "&" + "oauth_callback=" + Uri.EscapeUriString(WebAuthenticationBroker.GetCurrentApplicationCallbackUri().ToString());
-                String SigBaseString = "GET&";
-                SigBaseString += Uri.EscapeDataString(FlickrUrl) + "&" + SigBaseStringParams;
+                SigBaseStringParams += "&" + "oauth_nonce=" + Nonce.ToString();
+                SigBaseStringParams += "&" + "oauth_signature_method=HMAC-SHA1";
+                SigBaseStringParams += "&" + "oauth_timestamp=" + Math.Round(SinceEpoch.TotalSeconds);
+                SigBaseStringParams += "&" + "oauth_version=1.0";
+                String SigBaseString = "POST&";
+                SigBaseString += Uri.EscapeDataString(TwitterUrl) + "&" + Uri.EscapeDataString(SigBaseStringParams);
 
-                IBuffer KeyMaterial = CryptographicBuffer.ConvertStringToBinary(AppSecret + "&", BinaryStringEncoding.Utf8);
+                IBuffer KeyMaterial = CryptographicBuffer.ConvertStringToBinary(AppSecret+ "&", BinaryStringEncoding.Utf8);
                 MacAlgorithmProvider HmacSha1Provider = MacAlgorithmProvider.OpenAlgorithm("HMAC_SHA1");
                 CryptographicKey MacKey = HmacSha1Provider.CreateKey(KeyMaterial);
                 IBuffer DataToBeSigned = CryptographicBuffer.ConvertStringToBinary(SigBaseString, BinaryStringEncoding.Utf8);
                 IBuffer SignatureBuffer = CryptographicEngine.Sign(MacKey, DataToBeSigned);
                 String Signature = CryptographicBuffer.EncodeToBase64String(SignatureBuffer);
+                String DataToPost = "OAuth oauth_callback=\"" + Uri.EscapeDataString(WebAuthenticationBroker.GetCurrentApplicationCallbackUri().ToString()) + "\", oauth_consumer_key=\"" + AppKey + "\", oauth_nonce=\"" + Nonce.ToString() + "\", oauth_signature_method=\"HMAC-SHA1\", oauth_timestamp=\"" + Math.Round(SinceEpoch.TotalSeconds) + "\", oauth_version=\"1.0\", oauth_signature=\"" + Uri.EscapeDataString(Signature) + "\"";
 
-                FlickrUrl += "?" + SigBaseStringParams + "&oauth_signature=" + Signature;
-                SendData(FlickrUrl);
+              _postResponse =  await PostData(TwitterUrl, DataToPost);
+                //DebugPrint("Received Data: " + m_PostResponse);
 
-
-                if (_getResponse != null)
+                if (_postResponse != null)
                 {
                     String oauth_token = null;
                     String oauth_token_secret = null;
-                    String[] keyValPairs = _getResponse.Split('&');
+                    String[] keyValPairs = _postResponse.Split('&');
 
                     for (int i = 0; i < keyValPairs.Length; i++)
                     {
@@ -133,11 +135,11 @@ namespace DropBox
                     if (oauth_token != null)
                     {
 
-                        FlickrUrl = "https://www.dropbox.com/1/oauth/authorize?oauth_token=" + oauth_token;
-                        System.Uri StartUri = new Uri(FlickrUrl);
-                        System.Uri EndUri = WebAuthenticationBroker.GetCurrentApplicationCallbackUri();
+                           var url = "https://www.dropbox.com/1/oauth/authorize?oauth_token=" + oauth_token;
+                           System.Uri StartUri = new Uri(url);
+                           System.Uri EndUri = WebAuthenticationBroker.GetCurrentApplicationCallbackUri();
 
-                        
+                        //DebugPrint("Navigating to: " + TwitterUrl);
 
                         WebAuthenticationResult WebAuthenticationResult = await WebAuthenticationBroker.AuthenticateAsync(
                                                                 WebAuthenticationOptions.None,
@@ -145,15 +147,15 @@ namespace DropBox
                                                                 EndUri);
                         if (WebAuthenticationResult.ResponseStatus == WebAuthenticationStatus.Success)
                         {
-                          
+                            /////OutputToken(WebAuthenticationResult.ResponseData.ToString());
                         }
                         else if (WebAuthenticationResult.ResponseStatus == WebAuthenticationStatus.ErrorHttp)
                         {
-                            
+                            //OutputToken("HTTP Error returned by AuthenticateAsync() : " + WebAuthenticationResult.ResponseErrorDetail.ToString());
                         }
                         else
                         {
-                           
+                            // OutputToken("Error returned by AuthenticateAsync() : " + WebAuthenticationResult.ResponseStatus.ToString());
                         }
                     }
                 }
@@ -161,20 +163,16 @@ namespace DropBox
             }
         }
 
-        private async void SendData(String Url)
+        private async Task<string> PostData(String Url, String Data)
         {
-            try
-            {
+          
                 HttpWebRequest Request = (HttpWebRequest)WebRequest.Create(Url);
-                Request.Method = "GET";
+                Request.Method = "POST";
+                Request.Headers["Authorization"] = Data;
                 HttpWebResponse Response = (HttpWebResponse)await Request.GetResponseAsync();
                 StreamReader ResponseDataStream = new StreamReader(Response.GetResponseStream());
-               _getResponse = ResponseDataStream.ReadToEnd();
-            }
-            catch (Exception Err)
-            {
-                //rootPage.NotifyUser("Error posting data to server." + Err.Message, NotifyType.StatusMessage);
-            }
+               return ResponseDataStream.ReadToEnd();
+           
         }
 
         /// <summary>
